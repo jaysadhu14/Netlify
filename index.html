@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/recorderjs/1.1.0/recorder.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Recorder</title>
+    <link rel="stylesheet" href="styles.css"> <!-- Link to external CSS file -->
+</head>
+
+<body>
+
+    <div id="spectrum-pane">
+        <div id="text-prompter">
+            <span> ■■■■■■■■■■■ </span>
+            <span id="start"> ■ </span>
+            <span id="salutation"> Hi </span>&nbsp;&nbsp;&nbsp;
+            <span id="name"> Anusha </span>&nbsp;&nbsp;&nbsp;
+            <span id="statement"> How are you </span>
+        </div>
+        <div id="spectrum"></div>
+    </div>
+    <div id="controls-pane">
+        <div class="button" id="record-button">⏺️</div>
+        <div class="button" id="play-button">Play</div>
+        <div class="button" id="next-button" onclick="nextPage()">-></div>
+    </div>
+
+    <script>
+        if (window.location.protocol === "https:") {
+        $(document).ready(function () {
+            // when next button is clicked you can set the content of salutation, name and statement divs
+            /*
+            call the rest api to fetch next statement. lets say the api returned a json like  {"salutation": "Hi", "name":"Kuldeep", "statement": "how are you" }
+            then you can set salutation with 
+            $('#salutation').html(rest_response['salutation']);
+            likewise set name with 
+            $('#name').html(rest_response['name']);
+            similarly statement with 
+            $('#statement').html(rest_response['statement']);
+            */
+            $('#record-button').click(function () {
+                window.text_prompt_body = $('#text-prompter').html();
+                $('#spectrum').html("");
+                toggleRecording();
+                window.timestamps_list = []; // Create an empty list to store timestamps
+            });
+
+            $('#play-button').click(function () {
+                playRecording();
+            });
+
+            // Ask for microphone permission
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(function (stream) {
+                    console.log('Microphone permission granted');
+                    window.stream = stream; // Assigning stream to a global variable
+                })
+                .catch(function (err) {
+                    console.log('The following getUserMedia error occurred: ' + err);
+                });
+
+            window.tuning_offset = 0.10;
+            let canvas;
+            let canvasContext;
+            let isRecording = false;
+            let mediaRecorder;
+            let chunks = [];
+            let audioBlob;
+            let audioBlobUrl;
+
+            function snapshot() {
+                var currentTime = Date.now(); // Get the current time in milliseconds
+                var timeElapsed = (currentTime - window.startTime) / 1000; // Calculate the time elapsed in seconds
+                window.timestamps_list.push(timeElapsed); // Add the time elapsed to the list
+            }
+
+            function visualizeWaveform(audioBlob) {
+                var audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                var fileReader = new FileReader();
+
+                fileReader.onload = function () {
+                    var audioData = fileReader.result;
+                    audioContext.decodeAudioData(audioData, function (buffer) {
+                        var canvas = $('<canvas></canvas>').attr('width', $('#spectrum').width()).attr('height', $('#spectrum').height());
+                        $('#spectrum').append(canvas);
+
+                        var canvasContext = canvas[0].getContext('2d');
+                        var width = canvas.width();
+                        var height = canvas.height();
+                        var data = buffer.getChannelData(0);
+
+                        canvasContext.fillStyle = '#f0f0f0';
+                        canvasContext.fillRect(0, 0, width, height);
+
+                        canvasContext.lineWidth = 2;
+                        canvasContext.strokeStyle = '#333';
+
+                        var step = Math.ceil(data.length / width);
+                        var amp = height / 2;
+
+                        for (var i = 0; i < width; i++) {
+                            var min = 1.0;
+                            var max = -1.0;
+
+                            for (var j = 0; j < step; j++) {
+                                var datum = data[(i * step) + j];
+                                if (datum < min) {
+                                    min = datum;
+                                }
+                                if (datum > max) {
+                                    max = datum;
+                                }
+                            }
+
+                            canvasContext.beginPath();
+                            canvasContext.moveTo(i, (1 + min) * amp);
+                            canvasContext.lineTo(i, (1 + max) * amp);
+                            canvasContext.stroke();
+                        }
+
+                        drawMarkers(canvasContext, buffer.duration, window.timestamps_list);
+                    });
+                };
+
+                fileReader.readAsArrayBuffer(audioBlob);
+            }
+
+            function drawMarkers(context, duration, timestamps_list) {
+                var markerHeight = $('#spectrum').height();
+                console.log(timestamps_list);
+                var oneSecondWidth = $('#spectrum').width() / duration;
+
+                timestamps_list[1] += window.tuning_offset;
+
+                timestamps_list.forEach(function (marker) {
+                    var x = marker * oneSecondWidth;
+                    drawMarker(context, x, markerHeight, 'red');
+                });
+            }
+
+            function drawMarker(context, x, height, color) {
+                context.beginPath();
+                context.moveTo(x, 0);
+                context.lineTo(x, height);
+                context.strokeStyle = color;
+                context.stroke();
+            }
+
+            function toggleRecording() {
+                const recordButton = document.getElementById('record-button');
+                if (isRecording) {
+                    stopRecording();
+                    recordButton.innerHTML = '⏺️'; // Unicode character for record symbol
+                    recordButton.classList.remove('recording');
+                } else {
+                    recordButton.innerHTML = '⏹️'; // Unicode character for stop symbol
+                    recordButton.classList.add('recording');
+                    currentIndex = 0;
+
+                    var spans = $('#text-prompter span');
+
+                    function highlightAndColorize(index) {
+                        if (index < spans.length) {
+                            $(spans[index]).css('background-color', 'yellow');
+                            var characters = $(spans[index]).text();
+                            console.log($(spans[index]).attr('id'));
+                            if ($(spans[index]).attr('id') == 'start') {
+                                startRecording();
+                                window.startTime = Date.now();
+                            } else {
+                                if (window.startTime != null) {
+                                    snapshot();
+                                }
+                            }
+                            var newContent = '';
+                            for (var i = 0; i < characters.length; i++) {
+                                newContent += '<span>' + characters[i] + '</span>';
+                            }
+                            $(spans[index]).html(newContent);
+
+                            $(spans[index]).find('span').each(function (i) {
+                                $(this).delay(150 * i).queue(function () {
+                                    $(this).css('color', 'red').dequeue();
+                                });
+                            });
+
+                            setTimeout(function () {
+                                $(spans[index]).css('background-color', ''); // Remove highlight
+                                highlightAndColorize(index + 1); // Move to the next span
+                            }, 150 * characters.length);
+                        } else {
+                            setTimeout(function () {
+                                stopRecording();
+                                recordButton.innerHTML = '⏺️'; // Unicode character for record symbol
+                                recordButton.classList.remove('recording');
+
+                                $('#text-prompter span').css({
+                                    'background-color': '',
+                                    'color': ''
+                                });
+
+
+                            }, 1500);
+                        }
+                    }
+                    highlightAndColorize(0); // Start the process
+                }
+            }
+            function startRecording() {
+                isRecording = true;
+                chunks = [];
+                mediaRecorder = new MediaRecorder(window.stream);
+                mediaRecorder.ondataavailable = function (e) {
+                    chunks.push(e.data);
+                    visualizeWaveform(e.data);
+                };
+                mediaRecorder.onstop = function (e) {
+                    audioBlob = new Blob(chunks, { 'type': 'audio/wav' });
+                    audioBlobUrl = URL.createObjectURL(audioBlob);
+                };
+                mediaRecorder.start();
+                console.log('Recording started');
+            }
+            function stopRecording() {
+                $('#text-prompter').html(window.text_prompt_body);
+                isRecording = false;
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                    console.log('Recording stopped');
+                }
+            }
+            function playRecording() {
+                startSecond = window.timestamps_list[1];
+                endSecond = window.timestamps_list[2];
+                if (audioBlobUrl) {
+                    const audio = new Audio(audioBlobUrl);
+                    // Kuldeep: you should call the rest api to upload audio from here 'audio' variable will contain the wave file content and window.timestamps_list will contain the timestamps
+                    audio.currentTime = startSecond;
+                    audio.play();
+                    setTimeout(() => {
+                        audio.pause();
+                    }, (endSecond - startSecond) * 1000);
+                    console.log('Recording played');
+                } else {
+                    console.log('No recording to play');
+                }
+            }
+        });
+    } else {
+            // If not HTTPS, display a message or redirect
+            console.log("This page works only on HTTPS protocol.");
+        }
+    </script>
+</body>
+</html>
